@@ -3,12 +3,22 @@
 
 const { app, BrowserWindow, Menu, Tray, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const ServiceManager = require('./service-manager');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const FRONTEND_PORT = 3003;
 const API_PORT = 3004;
 const APP_URL = `http://localhost:${FRONTEND_PORT}`;
+const DEBUG_LOG = path.join(process.env.TEMP || 'C:\\Temp', 'clowder-main.log');
+
+function dbg(msg) {
+  const line = `[main ${new Date().toISOString()}] ${msg}\n`;
+  try { fs.appendFileSync(DEBUG_LOG, line); } catch {}
+}
+
+dbg(`Electron starting. ELECTRON_RUN_AS_NODE=${process.env.ELECTRON_RUN_AS_NODE}`);
+dbg(`process.type=${process.type}, versions.electron=${process.versions.electron}`);
 
 let mainWindow = null;
 let splashWindow = null;
@@ -98,6 +108,7 @@ function sendSplashStatus(msg) {
 }
 
 app.on('ready', async () => {
+  dbg('app ready event fired');
   createSplashWindow();
   createTray();
 
@@ -108,9 +119,12 @@ app.on('ready', async () => {
   });
 
   try {
+    dbg('startAll() called');
     await services.startAll();
+    dbg('startAll() done — creating main window');
     createMainWindow();
   } catch (err) {
+    dbg(`startAll() FAILED: ${err.message}`);
     dialog.showErrorBox(
       'Clowder AI - Startup Error',
       `Failed to start services:\n${err.message}\n\nCheck logs in .cat-cafe/logs/`,

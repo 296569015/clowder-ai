@@ -4,9 +4,32 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const net = require('net');
+const fs = require('fs');
 
 const POLL_INTERVAL_MS = 500;
 const MAX_WAIT_MS = 120_000;
+
+// Log file for diagnosing service startup issues
+const LOG_FILE = path.join(process.env.TEMP || 'C:\\Temp', 'clowder-desktop.log');
+function log(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  process.stdout.write(line);
+  try { fs.appendFileSync(LOG_FILE, line); } catch {}
+}
+
+// Resolve node executable: prefer system node over Electron's own node
+function resolveNode() {
+  // Common Windows locations
+  const candidates = [
+    'C:\\Program Files\\nodejs\\node.exe',
+    'C:\\Program Files (x86)\\nodejs\\node.exe',
+    path.join(process.env.APPDATA || '', '..', 'Local', 'Programs', 'node', 'node.exe'),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return 'node'; // fallback to PATH
+}
 
 class ServiceManager {
   constructor(projectRoot, { frontendPort, apiPort, onStatus }) {
@@ -18,17 +41,22 @@ class ServiceManager {
   }
 
   async startAll() {
+    log(`ServiceManager.startAll() — projectRoot: ${this.root}`);
     this.onStatus('Starting Redis...');
     await this._startRedis();
 
+    const nodeExe = resolveNode();
+    log(`Using node: ${nodeExe}`);
     this.onStatus('Starting API server...');
-    this._startProcess('api', 'node', [
+    this._startProcess('api', nodeExe, [
       path.join(this.root, 'packages', 'api', 'dist', 'index.js'),
     ]);
+    log('API process spawned, waiting for port ' + this.apiPort);
     await this._waitForPort(this.apiPort, 'API');
 
     this.onStatus('Starting Web frontend...');
     this._startNextJs();
+    log('Web process spawned, waiting for port ' + this.frontendPort);
     await this._waitForPort(this.frontendPort, 'Web');
 
     this.onStatus('Ready!');
@@ -41,7 +69,6 @@ class ServiceManager {
     const redisConf = path.join(
       this.root, '.cat-cafe', 'redis', 'windows', 'redis.conf',
     );
-    const fs = require('fs');
 
     // Already running — reuse it
     if (await this._isPortOpen(6399)) {
@@ -76,7 +103,7 @@ class ServiceManager {
   _commandExists(cmd) {
     return new Promise((resolve) => {
       const which = process.platform === 'win32' ? 'where' : 'which';
-      const p = require('child_process').spawn(which, [cmd], { stdio: 'ignore', windowsHide: true });
+      const p = spawn(which, [cmd], { stdio: 'ignore', windowsHide: true });
       p.on('close', (code) => resolve(code === 0));
       p.on('error', () => resolve(false));
     });
@@ -84,13 +111,27 @@ class ServiceManager {
 
   _startNextJs() {
     const webDir = path.join(this.root, 'packages', 'web');
-    // Prefer local next binary to avoid PATH issues
-    const nextBin = path.join(webDir, 'node_modules', '.bin', 'next.cmd');
-    const fs = require('fs');
-    const cmd = fs.existsSync(nextBin) ? nextBin : (process.platform === 'win32' ? 'npx.cmd' : 'npx');
-    const args = fs.existsSync(nextBin)
-      ? ['start', '--port', String(this.frontendPort)]
-      : ['next', 'start', '--port', String(this.frontendPort)];
+    // Find next's actual JS entry to avoid .cmd/.sh wrapper issues with spawn
+    const nextJs = path.join(
+      this.root,
+      'node_modules', '.pnpm',
+      'next@14.2.35_@babel+core@7.29.0_@opentelemetry+api@1.9.1_react-dom@18.3.1_react@18.3.1__react@18.3.1',
+      'node_modules', 'next', 'dist', 'bin', 'next',
+    );
+    const nodeExe = resolveNode();
+
+    let cmd, args;
+    if (fs.existsSync(nextJs)) {
+      // Use node + next JS directly — avoids .cmd spawn issues on Windows
+      cmd = nodeExe;
+      args = [nextJs, 'start', '--port', String(this.frontendPort)];
+    } else {
+      // Fallback: use cmd.exe to run next.cmd
+      cmd = 'cmd.exe';
+      args = ['/c', path.join(webDir, 'node_modules', '.bin', 'next.cmd'), 'start', '--port', String(this.frontendPort)];
+    }
+
+    log(`Starting Next.js: ${cmd} ${args.join(' ')}`);
     this._startProcess('web', cmd, args, { cwd: webDir });
   }
 
@@ -117,11 +158,15 @@ class ServiceManager {
     });
 
     proc.on('error', (err) => {
-      console.error(`[${name}] spawn error:`, err.message);
+      log(`[${name}] spawn error: ${err.message}`);
     });
 
-    proc.stdout?.on('data', (d) => console.log(`[${name}] ${d}`));
-    proc.stderr?.on('data', (d) => console.error(`[${name}] ${d}`));
+    proc.on('exit', (code, signal) => {
+      log(`[${name}] exited: code=${code} signal=${signal}`);
+    });
+
+    proc.stdout?.on('data', (d) => log(`[${name}] ${d.toString().trim()}`));
+    proc.stderr?.on('data', (d) => log(`[${name}] ERR: ${d.toString().trim()}`.slice(0, 500)));
 
     this.procs[name] = proc;
   }
