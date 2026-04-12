@@ -6,7 +6,7 @@ const path = require('path');
 const net = require('net');
 
 const POLL_INTERVAL_MS = 500;
-const MAX_WAIT_MS = 60_000;
+const MAX_WAIT_MS = 120_000;
 
 class ServiceManager {
   constructor(projectRoot, { frontendPort, apiPort, onStatus }) {
@@ -83,21 +83,31 @@ class ServiceManager {
   }
 
   _startNextJs() {
-    const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    this._startProcess('web', npxCmd, [
-      'next', 'start', '--port', String(this.frontendPort),
-    ], { cwd: path.join(this.root, 'packages', 'web') });
+    const webDir = path.join(this.root, 'packages', 'web');
+    // Prefer local next binary to avoid PATH issues
+    const nextBin = path.join(webDir, 'node_modules', '.bin', 'next.cmd');
+    const fs = require('fs');
+    const cmd = fs.existsSync(nextBin) ? nextBin : (process.platform === 'win32' ? 'npx.cmd' : 'npx');
+    const args = fs.existsSync(nextBin)
+      ? ['start', '--port', String(this.frontendPort)]
+      : ['next', 'start', '--port', String(this.frontendPort)];
+    this._startProcess('web', cmd, args, { cwd: webDir });
   }
 
   _startProcess(name, cmd, args, opts = {}) {
     const env = {
       ...process.env,
-      REDIS_URL: 'redis://localhost:6399',
       API_SERVER_PORT: String(this.apiPort),
       FRONTEND_PORT: String(this.frontendPort),
       NEXT_PUBLIC_API_URL: `http://localhost:${this.apiPort}`,
-      ...(this.memoryMode ? { MEMORY_STORE: '1' } : {}),
     };
+
+    if (this.memoryMode) {
+      env.MEMORY_STORE = '1';
+      delete env.REDIS_URL;
+    } else {
+      env.REDIS_URL = 'redis://localhost:6399';
+    }
 
     const proc = spawn(cmd, args, {
       cwd: opts.cwd || this.root,

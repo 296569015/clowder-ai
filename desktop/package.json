@@ -4,7 +4,8 @@
   "description": "Clowder AI Desktop - Multi-Agent Collaboration Platform",
   "main": "main.js",
   "scripts": {
-    "start": "cross-env ELECTRON_RUN_AS_NODE= electron .",
+    "start": "powershell -NoProfile -Command \"$env:ELECTRON_RUN_AS_NODE=''; & '.\\node_modules\\electron\\dist\\electron.exe' '.'\"",
+    "start:unix": "ELECTRON_RUN_AS_NODE='' ./node_modules/electron/dist/electron .",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
   },
