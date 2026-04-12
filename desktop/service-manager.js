@@ -43,23 +43,43 @@ class ServiceManager {
     );
     const fs = require('fs');
 
+    // Already running — reuse it
+    if (await this._isPortOpen(6399)) {
+      this.onStatus('Redis already running on 6399');
+      return;
+    }
+
+    // Check if any Redis binary is available
+    const hasPortable = fs.existsSync(portableRedis);
+    const hasSystem = await this._commandExists('redis-server');
+
+    if (!hasPortable && !hasSystem) {
+      this.onStatus('Redis not found — using memory store');
+      this.memoryMode = true;
+      return;
+    }
+
     let redisCmd = 'redis-server';
     let redisArgs = ['--port', '6399', '--save', '', '--appendonly', 'no'];
 
-    if (fs.existsSync(portableRedis)) {
+    if (hasPortable) {
       redisCmd = portableRedis;
       if (fs.existsSync(redisConf)) {
         redisArgs = [redisConf, '--port', '6399'];
       }
     }
 
-    if (await this._isPortOpen(6399)) {
-      this.onStatus('Redis already running on 6399');
-      return;
-    }
-
     this._startProcess('redis', redisCmd, redisArgs);
     await this._waitForPort(6399, 'Redis');
+  }
+
+  _commandExists(cmd) {
+    return new Promise((resolve) => {
+      const which = process.platform === 'win32' ? 'where' : 'which';
+      const p = require('child_process').spawn(which, [cmd], { stdio: 'ignore', windowsHide: true });
+      p.on('close', (code) => resolve(code === 0));
+      p.on('error', () => resolve(false));
+    });
   }
 
   _startNextJs() {
@@ -76,6 +96,7 @@ class ServiceManager {
       API_SERVER_PORT: String(this.apiPort),
       FRONTEND_PORT: String(this.frontendPort),
       NEXT_PUBLIC_API_URL: `http://localhost:${this.apiPort}`,
+      ...(this.memoryMode ? { MEMORY_STORE: '1' } : {}),
     };
 
     const proc = spawn(cmd, args, {

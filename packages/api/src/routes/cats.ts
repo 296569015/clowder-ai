@@ -429,7 +429,7 @@ function filterCatsForDesktop(
 
   const filtered: Record<string, CatConfig> = {};
   for (const [id, cat] of Object.entries(cats)) {
-    const cliName = PROVIDER_CLI_MAP[cat.provider] ?? cat.provider;
+    const cliName = (cat.provider ? PROVIDER_CLI_MAP[cat.provider] : undefined) ?? cat.provider ?? '';
     if (dc.installedClis[cliName] === false) continue;
     if (dc.alwaysHidden?.includes(cat.breedId ?? '')) continue;
     filtered[id] = cat;
